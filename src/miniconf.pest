@@ -1,0 +1,19 @@
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+COMMENT    = _{ "#" ~ (!NEWLINE ~ ANY)* }
+
+file       =  { SOI ~ NEWLINE* ~ (statement ~ NEWLINE*)* ~ EOI }
+statement  =  { section | kv }
+
+section    =  { "[" ~ ident ~ "]" }
+kv         =  { ident ~ "=" ~ value }
+
+ident      = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+value      =  { array | object | string | number | boolean | null }
+string     = @{ "\"" ~ ( "\\\"" | "\\n" | "\\t" | !("\"") ~ ANY )* ~ "\"" }
+number     = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+boolean    =  { "true" | "false" }
+null       =  { "null" }
+
+array      =  { "[" ~ (value ~ ("," ~ value)*)? ~ "]" }
+object     =  { "{" ~ (ident ~ ":" ~ value ~ ("," ~ ident ~ ":" ~ value)*)? ~ "}" }
