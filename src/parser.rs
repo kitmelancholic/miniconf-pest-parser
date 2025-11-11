@@ -1,107 +1,131 @@
 use pest::Parser;
+use pest::iterators::Pair;
 use pest_derive::Parser;
-use std::collections::HashMap;
+
+use crate::ast::{Document, Entry, Value};
+use crate::error::{MiniConfError, ParseErrorKind};
+
+const ROOT_SECTION: &str = "root";
 
 #[derive(Parser)]
-#[grammar = "miniconf.pest"]
-struct MiniConfParser;
+#[grammar = "grammar.pest"]
+/// Generated pest parser for MiniConf.
+pub struct MiniConfParser;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Str(String),
-    Num(f64),
-    Bool(bool),
-    Null,
-    Array(Vec<Value>),
-    Object(HashMap<String, Value>),
+/// Parses MiniConf input into a [`Document`].
+pub fn parse_document(source: &str) -> Result<Document, MiniConfError> {
+    let mut document = Document::new();
+    document.ensure_section_mut(ROOT_SECTION);
+    let mut current_section = ROOT_SECTION.to_string();
+
+    let pairs = MiniConfParser::parse(Rule::text, source)?
+        .next()
+        .expect("text rule must produce a pair")
+        .into_inner();
+
+    for pair in pairs {
+        match pair.as_rule() {
+            Rule::section_header => {
+                let name = pair.into_inner().next().unwrap().as_str().to_string();
+                current_section = name;
+                document.ensure_section_mut(&current_section);
+            }
+            Rule::key_value => {
+                handle_key_value(&mut document, &current_section, pair)?;
+            }
+            Rule::comment_line | Rule::EOI => {
+                // comments and explicit end markers are intentionally ignored
+            }
+            _ => {}
+        }
+    }
+
+    Ok(document)
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Document {
-    /// Map<section, Map<key, value>>
-    pub sections: HashMap<String, HashMap<String, Value>>,
+fn handle_key_value(
+    document: &mut Document,
+    current_section: &str,
+    pair: Pair<'_, Rule>,
+) -> Result<(), MiniConfError> {
+    let line = line_of(&pair);
+    let mut inner = pair.into_inner();
+    let key = inner.next().expect("key present").as_str().to_string();
+    let value_pair = inner
+        .find(|p| matches!(p.as_rule(), Rule::value))
+        .expect("value present");
+    let value = parse_value(value_pair)?;
+
+    let section = document.ensure_section_mut(current_section);
+    if section.entries.iter().any(|entry| entry.key == key) {
+        return Err(MiniConfError::semantic(
+            ParseErrorKind::DuplicateKey,
+            line,
+            format!("key `{key}` already defined in [{current_section}]"),
+        ));
+    }
+
+    section.entries.push(Entry::new(key, value, line));
+    Ok(())
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum MiniConfError {
-    #[error("parse error: {0}")]
-    Pest(#[from] pest::error::Error<Rule>),
-    #[error("number parse error: {0}")]
-    Num(#[from] std::num::ParseFloatError),
-}
-
-impl Document {
-    pub fn parse(input: &str) -> Result<Self, MiniConfError> {
-        let mut current_section = String::from("root");
-        let mut doc = Document::default();
-        doc.sections.entry(current_section.clone()).or_default();
-
-        let pairs = MiniConfParser::parse(Rule::file, input)?;
-
-        for pair in pairs.flatten() {
-            match pair.as_rule() {
-                Rule::section => {
-                    let mut inner = pair.into_inner();
-                    let name = inner.next().unwrap().as_str().to_string();
-                    current_section = name;
-                    doc.sections.entry(current_section.clone()).or_default();
-                }
-                Rule::kv => {
-                    let mut inner = pair.into_inner();
-                    let key = inner.next().unwrap().as_str().to_string();
-                    let val_pair = inner.next().unwrap();
-                    let val = parse_value(val_pair)?;
-                    doc.sections
-                        .entry(current_section.clone())
-                        .or_default()
-                        .insert(key, val);
-                }
-                _ => {}
+fn parse_value(pair: Pair<'_, Rule>) -> Result<Value, MiniConfError> {
+    match pair.as_rule() {
+        Rule::value => {
+            let inner = pair.into_inner().next().expect("value inner");
+            parse_value(inner)
+        }
+        Rule::quoted_string => Ok(Value::String(unescape(pair.as_str()))),
+        Rule::bare_string => Ok(Value::String(pair.as_str().to_string())),
+        Rule::number => {
+            let line = line_of(&pair);
+            match pair.as_str().parse::<f64>() {
+                Ok(num) => Ok(Value::Number(num)),
+                Err(err) => Err(MiniConfError::semantic(
+                    ParseErrorKind::InvalidValue,
+                    line,
+                    format!("invalid number: {err}"),
+                )),
             }
         }
-        Ok(doc)
+        Rule::boolean => Ok(Value::Bool(matches!(pair.as_str(), "true" | "yes"))),
+        Rule::array => parse_array(pair),
+        other => unreachable!("unexpected value rule: {other:?}"),
     }
 }
 
-fn parse_value(pair: pest::iterators::Pair<Rule>) -> Result<Value, MiniConfError> {
-    Ok(match pair.as_rule() {
-        Rule::string => {
-            let raw = pair.as_str();
-            let inner = &raw[1..raw.len() - 1];
-            let s = inner
-                .replace("\\\"", "\"")
-                .replace("\\n", "\n")
-                .replace("\\t", "\t");
-            Value::Str(s)
+fn parse_array(pair: Pair<'_, Rule>) -> Result<Value, MiniConfError> {
+    let mut values = Vec::new();
+    for inner in pair.into_inner() {
+        if matches!(inner.as_rule(), Rule::value) {
+            values.push(parse_value(inner)?);
         }
-        Rule::number => Value::Num(pair.as_str().parse::<f64>()?),
-        Rule::boolean => Value::Bool(pair.as_str() == "true"),
-        Rule::null => Value::Null,
-        Rule::array => {
-            let items = pair
-                .into_inner()
-                .filter(|p| matches!(p.as_rule(), Rule::value))
-                .map(parse_value)
-                .collect::<Result<Vec<_>, _>>()?;
-            Value::Array(items)
-        }
-        Rule::object => {
-            let mut map = HashMap::new();
-            let mut it = pair.into_inner().peekable();
-            while let Some(next) = it.next() {
-                if next.as_rule() == Rule::ident {
-                    let key = next.as_str().to_string();
-                    let val_pair = it.next().expect("value after key");
-                    let val = parse_value(val_pair)?;
-                    map.insert(key, val);
+    }
+    Ok(Value::Array(values))
+}
+
+fn unescape(raw: &str) -> String {
+    let body = &raw[1..raw.len() - 1];
+    let mut buf = String::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                match next {
+                    '"' => buf.push('"'),
+                    'n' => buf.push('\n'),
+                    't' => buf.push('\t'),
+                    '\\' => buf.push('\\'),
+                    other => buf.push(other),
                 }
             }
-            Value::Object(map)
+        } else {
+            buf.push(ch);
         }
-        Rule::value => {
-            let inner = pair.into_inner().next().unwrap();
-            parse_value(inner)?
-        }
-        _ => unreachable!("unexpected rule: {:?}", pair.as_rule()),
-    })
+    }
+    buf
+}
+
+fn line_of(pair: &Pair<'_, Rule>) -> usize {
+    pair.as_span().start_pos().line_col().0
 }

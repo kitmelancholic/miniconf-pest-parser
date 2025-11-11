@@ -1,0 +1,22 @@
+WHITESPACE = _{ " " | "\t" }
+NEWLINE = _{ "\r\n" | "\n" }
+COMMENT = { "#" ~ (!NEWLINE ~ ANY)* }
+
+text = { SOI ~ (line ~ NEWLINE*)* ~ EOI }
+line = _{ section_header | key_value | comment_line | NEWLINE }
+
+section_header = { padding ~ "[" ~ section_name ~ "]" ~ padding }
+key_value = { padding ~ key ~ padding ~ "=" ~ padding ~ value ~ padding ~ comment_line? }
+comment_line = @{ padding ~ COMMENT }
+
+padding = _{ WHITESPACE* }
+section_name = @{ ident }
+key = @{ ident }
+ident = { (ASCII_ALPHANUMERIC | "_" | "-")+ }
+
+value = { array | boolean | number | quoted_string | bare_string }
+quoted_string = @{ "\"" ~ ("\\\"" | "\\n" | "\\t" | "\\\\" | !("\"") ~ ANY)* ~ "\"" }
+bare_string = @{ (ASCII_ALPHANUMERIC | "_" | "-" | "/" | ".")+ }
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+boolean = { "true" | "false" | "yes" | "no" }
+array = { "[" ~ padding ~ (value ~ (padding ~ "," ~ padding ~ value)*)? ~ padding ~ "]" }
