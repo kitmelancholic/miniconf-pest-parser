@@ -2,6 +2,8 @@
 
 MiniConf is a plain-text configuration format with simple sections and `key = value` pairs. This crate provides both a reusable parser library and a convenient CLI built on top of a `pest` grammar.
 
+[crates.io](https://crates.io/crates/miniconf-parser)
+
 ## Features
 - Declarative PEG grammar in `src/grammar.pest` with explicit support for sections, key/value pairs, comments, and arrays.
 - Strongly-typed AST (`Document`, `Section`, `Value`) re-exported by the library.
