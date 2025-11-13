@@ -1,10 +1,6 @@
+#![doc = include_str!("../docs.md")]
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
-
-//! Pest-powered parser for the MiniConf configuration language.
-//!
-//! The crate exposes [`parse_str`] for one-shot parsing and re-exports the
-//! [`Document`], [`Section`], and [`Value`] types for downstream consumers.
 
 /// Abstract syntax tree types used to represent parsed documents.
 pub mod ast;

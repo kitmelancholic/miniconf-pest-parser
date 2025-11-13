@@ -25,12 +25,22 @@ cargo install miniconf-parser
 
 ## Library Quick Start
 ```rust
-use miniconf_parser::parse_str;
+use miniconf_parser::{parse_str, Value};
 
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 let source = "[service]\nport = 8080\n";
 let doc = parse_str(source)?;
-let service = doc.section("service").unwrap();
-assert_eq!("8080", service.get("port").unwrap().as_str());
+let port_entry = doc
+    .section("service")
+    .and_then(|section| section.entries.iter().find(|entry| entry.key == "port"))
+    .expect("port entry");
+let port = match &port_entry.value {
+    Value::Number(n) => *n,
+    _ => unreachable!("ports stay numeric"),
+};
+assert_eq!(8080.0, port);
+# Ok(())
+# }
 ```
 
 Every parse error provides byte offsets and friendly messages, making it easy to surface diagnostics in editors or servers.
